@@ -1,22 +1,26 @@
+// src/pages/Register.jsx
+
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   FiArrowRight,
-  FiCheck,
   FiEye,
   FiEyeOff,
+  FiLayers,
   FiLock,
   FiMail,
   FiUser,
-  FiLayers,
   FiZap,
-  FiShield,
-  FiCircle,
 } from "react-icons/fi";
 import { FaGoogle } from "react-icons/fa";
 
+import useAuth from "../hooks/useAuth";
+import useAxiosPublic from "../hooks/useAxiosPublic";
+
 const Register = () => {
   const navigate = useNavigate();
+  const { userRegister} = useAuth();
+  const axiosPublic = useAxiosPublic();
 
   const [formData, setFormData] = useState({
     fullName: "",
@@ -39,13 +43,29 @@ const Register = () => {
       [name]: type === "checkbox" ? checked : value,
     }));
 
-    if (error) setError("");
+    setError("");
   };
 
-  const passwordIsStrong = (password) => {
-    return (
-      password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password)
-    );
+  const isPasswordStrong = (password) =>
+    password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
+
+  const getErrorMessage = (err) => {
+    switch (err?.code) {
+      case "auth/email-already-in-use":
+        return "এই email দিয়ে account আগে থেকেই আছে। Login করো।";
+      case "auth/invalid-email":
+        return "সঠিক email address দাও।";
+      case "auth/weak-password":
+        return "আরও শক্তিশালী password ব্যবহার করো।";
+      case "auth/network-request-failed":
+        return "Network connection check করে আবার চেষ্টা করো।";
+      default:
+        return (
+          err?.response?.data?.message ||
+          err?.message ||
+          "Registration ব্যর্থ হয়েছে। আবার চেষ্টা করো।"
+        );
+    }
   };
 
   const handleSubmit = async (event) => {
@@ -56,64 +76,78 @@ const Register = () => {
       formData;
 
     if (!fullName.trim()) {
-      setError("Please enter your name.");
+      setError("তোমার নাম লিখো।");
       return;
     }
 
-    if (!passwordIsStrong(password)) {
-      setError("Use at least 8 characters, including a letter and a number.");
+    if (!isPasswordStrong(password)) {
+      setError(
+        "Password অন্তত ৮ অক্ষরের হতে হবে এবং letter ও number থাকতে হবে।",
+      );
       return;
     }
 
     if (password !== confirmPassword) {
-      setError("Your passwords do not match.");
+      setError("দুটি password মিলছে না।");
       return;
     }
 
     if (!agreeToTerms) {
-      setError("Please accept the Terms of Service to continue.");
+      setError("Terms of Service এবং Privacy Policy accept করো।");
       return;
     }
 
+    setIsSubmitting(true);
+
     try {
-      setIsSubmitting(true);
+      // 1) Firebase Authentication-এ account তৈরি
+      const credential = await userRegister(
+        fullName.trim(),
+        email.trim(),
+        password,
+      );
 
-      // TODO: Connect your backend registration endpoint here.
-      // Example:
-      // const response = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/register`, {
-      //   method: "POST",
-      //   headers: { "Content-Type": "application/json" },
-      //   body: JSON.stringify({ fullName, email, password }),
-      // });
-      //
-      // const data = await response.json();
-      // if (!response.ok) throw new Error(data.message || "Registration failed");
+      const firebaseUser = credential.user;
 
-      console.info("Registration form is valid:", {
-        fullName,
-        email,
-        // Do not log passwords in a real application.
-      });
+      // 2) Firebase ID token সংগ্রহ
+      const idToken = await firebaseUser.getIdToken();
 
-      // Change this to the route your app uses after successful signup.
-      // Keep this navigation after your API confirms registration.
-      // navigate("/onboarding");
+      // 3) Profile data backend-এ পাঠানো
+      // Backend token verify করে user document তৈরি করবে।
+      await axiosPublic.post(
+        "/users",
+        {
+          uid: firebaseUser.uid,
+          name: fullName.trim(),
+          email: firebaseUser.email,
+          photoURL: firebaseUser.photoURL || "",
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+        },
+      );
+
+      // 4) Firebase + MongoDB দুটো কাজ সফল হলে redirect
+      navigate("/onboarding");
     } catch (err) {
-      setError(err.message || "Something went wrong. Please try again.");
+      console.error("Registration error:", err);
+      setError(getErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleGoogleSignup = () => {
-    // TODO: Start Google OAuth using your authentication provider.
-    setError("Google signup is not connected yet.");
+    // Google OAuth Firebase-এ enable করে provider method যোগ করতে হবে।
+    setError("Google signup এখনো configure করা হয়নি।");
   };
 
   return (
     <main className="min-h-screen bg-base-100 text-base-content">
       <div className="grid min-h-screen lg:grid-cols-2">
-        {/* Left: brand and product story */}
+        {/* Brand / visual panel */}
         <section className="relative hidden overflow-hidden bg-slate-950 px-10 py-10 text-white lg:flex lg:flex-col xl:px-16">
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute -left-28 -top-28 h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
@@ -125,14 +159,14 @@ const Register = () => {
             to="/"
             className="relative z-10 inline-flex w-fit items-center gap-3"
           >
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500 text-white shadow-lg shadow-violet-500/25">
+            <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500">
               <FiLayers className="text-xl" />
             </span>
             <span className="text-xl font-bold tracking-tight">TaskFlow</span>
           </Link>
 
           <div className="relative z-10 my-auto max-w-xl py-14">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-violet-200">
+            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-violet-200">
               <FiZap />A clearer way to work together
             </div>
 
@@ -144,12 +178,11 @@ const Register = () => {
             </h1>
 
             <p className="mt-5 max-w-lg text-base leading-7 text-slate-300">
-              Plan projects, organize tasks, and keep everyone moving in the
-              same direction—all in one collaborative workspace.
+              Plan projects, organize tasks, and keep your team moving in one
+              collaborative workspace.
             </p>
 
-            {/* Decorative product preview */}
-            <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.07] p-4 shadow-2xl shadow-black/20 backdrop-blur-sm">
+            <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.07] p-5 backdrop-blur-sm">
               <div className="flex items-center justify-between border-b border-white/10 pb-4">
                 <div>
                   <p className="text-sm font-semibold">Website redesign</p>
@@ -157,119 +190,58 @@ const Register = () => {
                     Workspace · Product team
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">
+                <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs text-emerald-300">
                   On track
                 </span>
               </div>
 
-              <div className="grid grid-cols-3 gap-3 pt-4">
+              <div className="mt-4 grid grid-cols-3 gap-3">
                 {[
-                  {
-                    title: "To do",
-                    count: "03",
-                    tasks: ["Research", "Wireframes"],
-                    color: "bg-slate-400",
-                  },
+                  { title: "To do", tasks: ["Research", "Wireframes"] },
                   {
                     title: "In progress",
-                    count: "02",
                     tasks: ["Landing page", "Design system"],
-                    color: "bg-violet-400",
                   },
-                  {
-                    title: "Done",
-                    count: "08",
-                    tasks: ["Kickoff", "Project brief"],
-                    color: "bg-emerald-400",
-                  },
+                  { title: "Done", tasks: ["Kickoff", "Project brief"] },
                 ].map((column) => (
                   <div
                     key={column.title}
                     className="rounded-xl bg-slate-900/80 p-3"
                   >
-                    <div className="mb-3 flex items-center justify-between gap-1">
-                      <span className="text-[11px] font-medium text-slate-300">
-                        {column.title}
-                      </span>
-                      <span className="text-[10px] text-slate-500">
-                        {column.count}
-                      </span>
-                    </div>
-
+                    <p className="mb-3 text-[11px] font-medium text-slate-300">
+                      {column.title}
+                    </p>
                     {column.tasks.map((task) => (
                       <div
                         key={task}
-                        className="mb-2 rounded-lg border border-white/[0.06] bg-white/[0.04] p-2"
+                        className="mb-2 rounded-lg border border-white/[0.06] bg-white/[0.04] p-2 text-[10px] text-slate-300"
                       >
-                        <div
-                          className={`mb-2 h-1 w-5 rounded-full ${column.color}`}
-                        />
-                        <p className="text-[10px] leading-4 text-slate-300">
-                          {task}
-                        </p>
-                        <div className="mt-2 flex items-center gap-1">
-                          <FiCircle className="text-[9px] text-slate-500" />
-                          <span className="text-[9px] text-slate-500">
-                            Task
-                          </span>
-                        </div>
+                        {task}
                       </div>
                     ))}
                   </div>
                 ))}
               </div>
-
-              <div className="mt-4 flex items-center justify-between rounded-xl bg-white/[0.04] px-3 py-2.5">
-                <div className="flex -space-x-2">
-                  <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-slate-900 bg-amber-300 text-[10px] font-bold text-slate-900">
-                    JD
-                  </span>
-                  <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-slate-900 bg-sky-300 text-[10px] font-bold text-slate-900">
-                    AM
-                  </span>
-                  <span className="grid h-7 w-7 place-items-center rounded-full border-2 border-slate-900 bg-pink-300 text-[10px] font-bold text-slate-900">
-                    SK
-                  </span>
-                </div>
-                <p className="text-xs text-slate-400">Your team, in sync</p>
-              </div>
-            </div>
-
-            <div className="mt-7 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-400">
-              <span className="inline-flex items-center gap-2">
-                <FiCheck className="text-emerald-300" />
-                Simple project planning
-              </span>
-              <span className="inline-flex items-center gap-2">
-                <FiCheck className="text-emerald-300" />
-                One shared workspace
-              </span>
             </div>
           </div>
 
-          <div className="relative z-10 flex items-center justify-between text-xs text-slate-500">
-            <span>© {new Date().getFullYear()} TaskFlow</span>
-            <span className="inline-flex items-center gap-2">
-              <FiShield />
-              Built for teams
-            </span>
-          </div>
+          <p className="relative z-10 text-xs text-slate-500">
+            © {new Date().getFullYear()} TaskFlow · Work, organized.
+          </p>
         </section>
 
-        {/* Right: registration form */}
+        {/* Registration form */}
         <section className="flex items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
           <div className="w-full max-w-md">
             <div className="mb-8 flex items-center justify-between lg:hidden">
               <Link to="/" className="inline-flex items-center gap-2.5">
                 <span className="grid h-9 w-9 place-items-center rounded-xl bg-violet-600 text-white">
-                  <FiLayers className="text-lg" />
+                  <FiLayers />
                 </span>
                 <span className="text-lg font-bold">TaskFlow</span>
               </Link>
-              <Link
-                to="/login"
-                className="text-sm font-medium text-base-content/70 transition hover:text-primary"
-              >
+
+              <Link to="/login" className="text-sm font-medium text-primary">
                 Sign in
               </Link>
             </div>
@@ -291,7 +263,7 @@ const Register = () => {
               onClick={handleGoogleSignup}
               className="btn btn-outline h-12 w-full border-base-300 bg-base-100 normal-case hover:bg-base-200"
             >
-              <FaGoogle className="text-base" />
+              <FaGoogle />
               Continue with Google
             </button>
 
@@ -312,7 +284,7 @@ const Register = () => {
                   Full name
                 </label>
                 <div className="relative">
-                  <FiUser className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiUser className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
                   <input
                     id="fullName"
                     name="fullName"
@@ -322,7 +294,7 @@ const Register = () => {
                     value={formData.fullName}
                     onChange={updateField}
                     required
-                    className="input input-bordered h-12 w-full pl-10 focus:border-primary focus:outline-none"
+                    className="input input-bordered h-12 w-full pl-10"
                   />
                 </div>
               </div>
@@ -332,10 +304,10 @@ const Register = () => {
                   htmlFor="email"
                   className="mb-2 block text-sm font-medium"
                 >
-                  Work email
+                  Email address
                 </label>
                 <div className="relative">
-                  <FiMail className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiMail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
                   <input
                     id="email"
                     name="email"
@@ -345,7 +317,7 @@ const Register = () => {
                     value={formData.email}
                     onChange={updateField}
                     required
-                    className="input input-bordered h-12 w-full pl-10 focus:border-primary focus:outline-none"
+                    className="input input-bordered h-12 w-full pl-10"
                   />
                 </div>
               </div>
@@ -358,7 +330,7 @@ const Register = () => {
                   Password
                 </label>
                 <div className="relative">
-                  <FiLock className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiLock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
                   <input
                     id="password"
                     name="password"
@@ -369,21 +341,21 @@ const Register = () => {
                     onChange={updateField}
                     required
                     minLength={8}
-                    className="input input-bordered h-12 w-full pl-10 pr-12 focus:border-primary focus:outline-none"
+                    className="input input-bordered h-12 w-full pl-10 pr-12"
                   />
                   <button
                     type="button"
                     aria-label={
                       showPassword ? "Hide password" : "Show password"
                     }
-                    onClick={() => setShowPassword((shown) => !shown)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-base-content/50 transition hover:text-base-content"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
                   >
                     {showPassword ? <FiEyeOff /> : <FiEye />}
                   </button>
                 </div>
                 <p className="mt-1.5 text-xs text-base-content/50">
-                  Use 8+ characters with at least one letter and one number.
+                  8+ characters, including a letter and a number.
                 </p>
               </div>
 
@@ -395,7 +367,7 @@ const Register = () => {
                   Confirm password
                 </label>
                 <div className="relative">
-                  <FiLock className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiLock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
                   <input
                     id="confirmPassword"
                     name="confirmPassword"
@@ -405,7 +377,7 @@ const Register = () => {
                     value={formData.confirmPassword}
                     onChange={updateField}
                     required
-                    className="input input-bordered h-12 w-full pl-10 pr-12 focus:border-primary focus:outline-none"
+                    className="input input-bordered h-12 w-full pl-10 pr-12"
                   />
                   <button
                     type="button"
@@ -414,8 +386,10 @@ const Register = () => {
                         ? "Hide confirm password"
                         : "Show confirm password"
                     }
-                    onClick={() => setShowConfirmPassword((shown) => !shown)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-base-content/50 transition hover:text-base-content"
+                    onClick={() =>
+                      setShowConfirmPassword((visible) => !visible)
+                    }
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
                   >
                     {showConfirmPassword ? <FiEyeOff /> : <FiEye />}
                   </button>
@@ -450,18 +424,15 @@ const Register = () => {
               </label>
 
               {error && (
-                <div
-                  role="alert"
-                  className="rounded-lg border border-error/20 bg-error/10 px-3.5 py-3 text-sm text-error"
-                >
-                  {error}
+                <div role="alert" className="alert alert-error text-sm">
+                  <span>{error}</span>
                 </div>
               )}
 
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="btn btn-primary h-12 w-full gap-2 normal-case shadow-lg shadow-primary/15 transition hover:-translate-y-0.5 disabled:hover:translate-y-0"
+                className="btn btn-primary h-12 w-full gap-2 normal-case"
               >
                 {isSubmitting ? (
                   <>
@@ -481,16 +452,10 @@ const Register = () => {
               Already have an account?{" "}
               <Link
                 to="/login"
-                className="font-semibold text-primary transition hover:underline"
+                className="font-semibold text-primary hover:underline"
               >
                 Sign in
               </Link>
-            </p>
-
-            <p className="mt-8 text-center text-xs leading-5 text-base-content/40">
-              By creating an account, you can start managing your projects with
-              TaskFlow. Your account will be created after the server
-              successfully verifies your registration.
             </p>
           </div>
         </section>
