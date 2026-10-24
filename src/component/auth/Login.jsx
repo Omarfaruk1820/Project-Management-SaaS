@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   FiArrowRight,
@@ -11,9 +11,42 @@ import {
   FiShield,
   FiZap,
 } from "react-icons/fi";
-import { FaGoogle } from "react-icons/fa";
+
+import useAuth from "../hooks/useAuth";
+import GoogleSignIn from "../auth/GoogleSignIn";
+
+const getLoginErrorMessage = (err) => {
+  switch (err?.code) {
+    case "auth/invalid-credential":
+    case "auth/wrong-password":
+    case "auth/user-not-found":
+      return "Incorrect email or password. Please try again.";
+
+    case "auth/invalid-email":
+      return "Please enter a valid email address.";
+
+    case "auth/user-disabled":
+      return "This account has been disabled. Please contact support.";
+
+    case "auth/too-many-requests":
+      return "Too many attempts. Please wait and try again later.";
+
+    case "auth/network-request-failed":
+      return "Network error. Check your connection and try again.";
+
+    case "auth/popup-closed-by-user":
+      return "The Google sign-in window was closed.";
+
+    case "auth/popup-blocked":
+      return "Your browser blocked the Google sign-in popup. Allow popups and try again.";
+
+    default:
+      return "Unable to sign in. Please try again.";
+  }
+};
 
 const Login = () => {
+  const { user, loading, userLogin } = useAuth();
   const navigate = useNavigate();
 
   const [formData, setFormData] = useState({
@@ -26,6 +59,13 @@ const Login = () => {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Redirect users who already have an active Firebase session.
+  useEffect(() => {
+    if (!loading && user) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [loading, user, navigate]);
+
   const updateField = (event) => {
     const { name, value, type, checked } = event.target;
 
@@ -34,14 +74,16 @@ const Login = () => {
       [name]: type === "checkbox" ? checked : value,
     }));
 
-    if (error) setError("");
+    setError("");
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
 
-    if (!formData.email.trim() || !formData.password) {
+    const email = formData.email.trim();
+
+    if (!email || !formData.password) {
       setError("Please enter your email and password.");
       return;
     }
@@ -49,44 +91,28 @@ const Login = () => {
     try {
       setIsSubmitting(true);
 
-      // TODO: Connect your backend login endpoint.
-      // Example:
-      // const response = await fetch(
-      //   `${import.meta.env.VITE_API_URL}/api/auth/login`,
-      //   {
-      //     method: "POST",
-      //     headers: { "Content-Type": "application/json" },
-      //     body: JSON.stringify({
-      //       email: formData.email,
-      //       password: formData.password,
-      //       rememberMe: formData.rememberMe,
-      //     }),
-      //   }
-      // );
-      //
-      // const data = await response.json();
-      // if (!response.ok) throw new Error(data.message || "Login failed");
-      //
-      // Store/use authentication state according to your backend's
-      // secure session or token strategy, then redirect:
-      // navigate("/dashboard");
+      // Firebase email/password authentication.
+      // AuthProvider should apply the rememberMe persistence preference.
+      await userLogin(email, formData.password, formData.rememberMe);
 
-      console.info("Login form is ready for API integration.", {
-        email: formData.email,
-        rememberMe: formData.rememberMe,
-        // Never log the password.
-      });
+      navigate("/dashboard", { replace: true });
     } catch (err) {
-      setError(err.message || "Unable to sign in. Please try again.");
+      setError(getLoginErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleGoogleLogin = () => {
-    // TODO: Start Google OAuth using your authentication provider.
-    setError("Google sign-in is not connected yet.");
+  const handleGoogleSuccess = async () => {
+    // GoogleSignIn has already authenticated with Firebase.
+    navigate("/dashboard", { replace: true });
   };
+
+  const handleGoogleError = (err) => {
+    setError(getLoginErrorMessage(err));
+  };
+
+  const isBusy = loading || isSubmitting;
 
   return (
     <main className="min-h-screen bg-base-100 text-base-content">
@@ -238,6 +264,7 @@ const Login = () => {
                 </span>
                 <span className="text-lg font-bold">TaskFlow</span>
               </Link>
+
               <Link
                 to="/register"
                 className="text-sm font-medium text-base-content/70 transition hover:text-primary"
@@ -258,14 +285,12 @@ const Login = () => {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleGoogleLogin}
-              className="btn btn-outline h-12 w-full border-base-300 bg-base-100 normal-case hover:bg-base-200"
-            >
-              <FaGoogle className="text-base" />
-              Continue with Google
-            </button>
+            <GoogleSignIn
+              onSuccess={handleGoogleSuccess}
+              onError={handleGoogleError}
+              disabled={isBusy}
+              label="Continue with Google"
+            />
 
             <div className="my-6 flex items-center gap-4">
               <div className="h-px flex-1 bg-base-300" />
@@ -294,6 +319,7 @@ const Login = () => {
                     value={formData.email}
                     onChange={updateField}
                     required
+                    disabled={isBusy}
                     className="input input-bordered h-12 w-full pl-10 focus:border-primary focus:outline-none"
                   />
                 </div>
@@ -323,6 +349,7 @@ const Login = () => {
                     value={formData.password}
                     onChange={updateField}
                     required
+                    disabled={isBusy}
                     className="input input-bordered h-12 w-full pl-10 pr-12 focus:border-primary focus:outline-none"
                   />
                   <button
@@ -330,6 +357,7 @@ const Login = () => {
                     aria-label={
                       showPassword ? "Hide password" : "Show password"
                     }
+                    aria-pressed={showPassword}
                     onClick={() => setShowPassword((shown) => !shown)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-base-content/50 transition hover:text-base-content"
                   >
@@ -344,6 +372,7 @@ const Login = () => {
                   name="rememberMe"
                   checked={formData.rememberMe}
                   onChange={updateField}
+                  disabled={isBusy}
                   className="checkbox checkbox-primary checkbox-sm"
                 />
                 Remember me on this device
@@ -352,6 +381,7 @@ const Login = () => {
               {error && (
                 <div
                   role="alert"
+                  aria-live="polite"
                   className="rounded-lg border border-error/20 bg-error/10 px-3.5 py-3 text-sm text-error"
                 >
                   {error}
@@ -360,7 +390,7 @@ const Login = () => {
 
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={isBusy}
                 className="btn btn-primary h-12 w-full gap-2 normal-case shadow-lg shadow-primary/15 transition hover:-translate-y-0.5 disabled:hover:translate-y-0"
               >
                 {isSubmitting ? (

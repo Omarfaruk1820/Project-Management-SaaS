@@ -1,5 +1,3 @@
-// src/pages/Register.jsx
-
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -12,14 +10,37 @@ import {
   FiUser,
   FiZap,
 } from "react-icons/fi";
-import { FaGoogle } from "react-icons/fa";
 
 import useAuth from "../hooks/useAuth";
 import useAxiosPublic from "../hooks/useAxiosPublic";
+import GoogleSignIn from "../auth/GoogleSignIn";
+
+const getAuthErrorMessage = (err) => {
+  switch (err?.code) {
+    case "auth/email-already-in-use":
+      return "এই email দিয়ে account আগে থেকেই আছে। Login করো।";
+    case "auth/invalid-email":
+      return "সঠিক email address দাও।";
+    case "auth/weak-password":
+      return "আরও শক্তিশালী password ব্যবহার করো।";
+    case "auth/network-request-failed":
+      return "Network connection check করে আবার চেষ্টা করো।";
+    case "auth/popup-closed-by-user":
+      return "Google sign-in window বন্ধ হয়ে গেছে। আবার চেষ্টা করো।";
+    case "auth/popup-blocked":
+      return "Browser popup block করেছে। Popup allow করে আবার চেষ্টা করো।";
+    default:
+      return (
+        err?.response?.data?.message ||
+        err?.message ||
+        "Registration ব্যর্থ হয়েছে। আবার চেষ্টা করো।"
+      );
+  }
+};
 
 const Register = () => {
   const navigate = useNavigate();
-  const { userRegister} = useAuth();
+  const { userRegister, loading: authLoading } = useAuth();
   const axiosPublic = useAxiosPublic();
 
   const [formData, setFormData] = useState({
@@ -49,33 +70,35 @@ const Register = () => {
   const isPasswordStrong = (password) =>
     password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
 
-  const getErrorMessage = (err) => {
-    switch (err?.code) {
-      case "auth/email-already-in-use":
-        return "এই email দিয়ে account আগে থেকেই আছে। Login করো।";
-      case "auth/invalid-email":
-        return "সঠিক email address দাও।";
-      case "auth/weak-password":
-        return "আরও শক্তিশালী password ব্যবহার করো।";
-      case "auth/network-request-failed":
-        return "Network connection check করে আবার চেষ্টা করো।";
-      default:
-        return (
-          err?.response?.data?.message ||
-          err?.message ||
-          "Registration ব্যর্থ হয়েছে। আবার চেষ্টা করো।"
-        );
-    }
+  // Create/update MongoDB profile using a verified Firebase token.
+  const syncUserProfile = async (firebaseUser, displayName) => {
+    const idToken = await firebaseUser.getIdToken();
+
+    await axiosPublic.post(
+      "/users",
+      {
+        uid: firebaseUser.uid,
+        name: displayName || firebaseUser.displayName || "",
+        email: firebaseUser.email,
+        photoURL: firebaseUser.photoURL || "",
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      },
+    );
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
     setError("");
 
-    const { fullName, email, password, confirmPassword, agreeToTerms } =
-      formData;
+    const fullName = formData.fullName.trim();
+    const email = formData.email.trim();
+    const { password, confirmPassword, agreeToTerms } = formData;
 
-    if (!fullName.trim()) {
+    if (!fullName) {
       setError("তোমার নাম লিখো।");
       return;
     }
@@ -97,57 +120,50 @@ const Register = () => {
       return;
     }
 
-    setIsSubmitting(true);
-
     try {
-      // 1) Firebase Authentication-এ account তৈরি
-      const credential = await userRegister(
-        fullName.trim(),
-        email.trim(),
-        password,
-      );
+      setIsSubmitting(true);
 
-      const firebaseUser = credential.user;
+      const credential = await userRegister(fullName, email, password);
 
-      // 2) Firebase ID token সংগ্রহ
-      const idToken = await firebaseUser.getIdToken();
+      await syncUserProfile(credential.user, fullName);
 
-      // 3) Profile data backend-এ পাঠানো
-      // Backend token verify করে user document তৈরি করবে।
-      await axiosPublic.post(
-        "/users",
-        {
-          uid: firebaseUser.uid,
-          name: fullName.trim(),
-          email: firebaseUser.email,
-          photoURL: firebaseUser.photoURL || "",
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${idToken}`,
-          },
-        },
-      );
-
-      // 4) Firebase + MongoDB দুটো কাজ সফল হলে redirect
-      navigate("/onboarding");
+      navigate("/onboarding", { replace: true });
     } catch (err) {
-      console.error("Registration error:", err);
-      setError(getErrorMessage(err));
+      console.error("Registration failed:", err);
+      setError(getAuthErrorMessage(err));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleGoogleSignup = () => {
-    // Google OAuth Firebase-এ enable করে provider method যোগ করতে হবে।
-    setError("Google signup এখনো configure করা হয়নি।");
+  const handleGoogleSuccess = async (credential) => {
+    setError("");
+
+    try {
+      setIsSubmitting(true);
+
+      const firebaseUser = credential.user;
+
+      // Google profile details come from Firebase's provider response.
+      await syncUserProfile(firebaseUser, firebaseUser.displayName);
+
+      navigate("/onboarding", { replace: true });
+    } catch (err) {
+      console.error("Google registration/profile sync failed:", err);
+      setError(
+        `Google sign-in হয়েছে, কিন্তু profile save করা যায়নি। Retry করো। ${getAuthErrorMessage(err)}`,
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const busy = authLoading || isSubmitting;
 
   return (
     <main className="min-h-screen bg-base-100 text-base-content">
       <div className="grid min-h-screen lg:grid-cols-2">
-        {/* Brand / visual panel */}
+        {/* Brand / product panel */}
         <section className="relative hidden overflow-hidden bg-slate-950 px-10 py-10 text-white lg:flex lg:flex-col xl:px-16">
           <div className="pointer-events-none absolute inset-0">
             <div className="absolute -left-28 -top-28 h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
@@ -240,7 +256,6 @@ const Register = () => {
                 </span>
                 <span className="text-lg font-bold">TaskFlow</span>
               </Link>
-
               <Link to="/login" className="text-sm font-medium text-primary">
                 Sign in
               </Link>
@@ -258,14 +273,11 @@ const Register = () => {
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={handleGoogleSignup}
-              className="btn btn-outline h-12 w-full border-base-300 bg-base-100 normal-case hover:bg-base-200"
-            >
-              <FaGoogle />
-              Continue with Google
-            </button>
+            <GoogleSignIn
+              onSuccess={handleGoogleSuccess}
+              disabled={busy}
+              onError={(err) => setError(getAuthErrorMessage(err))}
+            />
 
             <div className="my-6 flex items-center gap-4">
               <div className="h-px flex-1 bg-base-300" />
@@ -294,6 +306,7 @@ const Register = () => {
                     value={formData.fullName}
                     onChange={updateField}
                     required
+                    disabled={busy}
                     className="input input-bordered h-12 w-full pl-10"
                   />
                 </div>
@@ -317,6 +330,7 @@ const Register = () => {
                     value={formData.email}
                     onChange={updateField}
                     required
+                    disabled={busy}
                     className="input input-bordered h-12 w-full pl-10"
                   />
                 </div>
@@ -341,6 +355,7 @@ const Register = () => {
                     onChange={updateField}
                     required
                     minLength={8}
+                    disabled={busy}
                     className="input input-bordered h-12 w-full pl-10 pr-12"
                   />
                   <button
@@ -348,7 +363,7 @@ const Register = () => {
                     aria-label={
                       showPassword ? "Hide password" : "Show password"
                     }
-                    onClick={() => setShowPassword((visible) => !visible)}
+                    onClick={() => setShowPassword((shown) => !shown)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
                   >
                     {showPassword ? <FiEyeOff /> : <FiEye />}
@@ -377,6 +392,7 @@ const Register = () => {
                     value={formData.confirmPassword}
                     onChange={updateField}
                     required
+                    disabled={busy}
                     className="input input-bordered h-12 w-full pl-10 pr-12"
                   />
                   <button
@@ -386,9 +402,7 @@ const Register = () => {
                         ? "Hide confirm password"
                         : "Show confirm password"
                     }
-                    onClick={() =>
-                      setShowConfirmPassword((visible) => !visible)
-                    }
+                    onClick={() => setShowConfirmPassword((shown) => !shown)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
                   >
                     {showConfirmPassword ? <FiEyeOff /> : <FiEye />}
@@ -402,6 +416,7 @@ const Register = () => {
                   name="agreeToTerms"
                   checked={formData.agreeToTerms}
                   onChange={updateField}
+                  disabled={busy}
                   className="checkbox checkbox-primary checkbox-sm mt-0.5"
                 />
                 <span className="leading-5">
@@ -424,14 +439,18 @@ const Register = () => {
               </label>
 
               {error && (
-                <div role="alert" className="alert alert-error text-sm">
+                <div
+                  role="alert"
+                  aria-live="polite"
+                  className="alert alert-error text-sm"
+                >
                   <span>{error}</span>
                 </div>
               )}
 
               <button
                 type="submit"
-                disabled={isSubmitting}
+                disabled={busy}
                 className="btn btn-primary h-12 w-full gap-2 normal-case"
               >
                 {isSubmitting ? (

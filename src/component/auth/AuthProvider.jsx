@@ -1,56 +1,68 @@
 import {
   createUserWithEmailAndPassword,
+  GoogleAuthProvider,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut,
   updateProfile,
 } from "firebase/auth";
-
-import { createContext, useEffect, useState } from "react";
+import { createContext, useEffect, useMemo, useState } from "react";
 import auth from "../auth/firebase.config";
 
 export const AuthContext = createContext(null);
+
+const googleProvider = new GoogleAuthProvider();
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Firebase account তৈরি করে display name সেট করে
   const userRegister = async (name, email, password) => {
     setError(null);
 
     try {
-      const userCredential = await createUserWithEmailAndPassword(
+      const credential = await createUserWithEmailAndPassword(
         auth,
-        email,
+        email.trim(),
         password,
       );
 
-      await updateProfile(userCredential.user, {
-        displayName: name,
+      await updateProfile(credential.user, {
+        displayName: name.trim(),
       });
 
-      // Updated profile-সহ credential ফেরত দাও
-      return userCredential;
+      return credential;
     } catch (err) {
       setError(err);
       throw err;
     }
   };
 
-  const userlogin = async (email, password) => {
+  const userLogin = async (email, password) => {
     setError(null);
 
     try {
-      return await signInWithEmailAndPassword(auth, email, password);
+      return await signInWithEmailAndPassword(auth, email.trim(), password);
     } catch (err) {
       setError(err);
       throw err;
     }
   };
 
-  const userlogOut = async () => {
+  const userGoogleLogin = async () => {
+    setError(null);
+
+    try {
+      return await signInWithPopup(auth, googleProvider);
+    } catch (err) {
+      setError(err);
+      throw err;
+    }
+  };
+
+  const userLogOut = async () => {
     setError(null);
 
     try {
@@ -62,7 +74,6 @@ const AuthProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    // Firebase-এর initial session check এবং পরবর্তী auth changes শোনে
     const unsubscribe = onAuthStateChanged(
       auth,
       (currentUser) => {
@@ -76,18 +87,21 @@ const AuthProvider = ({ children }) => {
       },
     );
 
-    // Component unmount হলে listener বন্ধ
-    return () => unsubscribe();
+    return unsubscribe;
   }, []);
 
-  const authInfo = {
-    user,
-    loading,
-    error,
-    userRegister,
-    userlogin,
-    userlogOut,
-  };
+  const authInfo = useMemo(
+    () => ({
+      user,
+      loading,
+      error,
+      userRegister,
+      userLogin,
+      userGoogleLogin,
+      userLogOut,
+    }),
+    [user, loading, error],
+  );
 
   return (
     <AuthContext.Provider value={authInfo}>{children}</AuthContext.Provider>
