@@ -1,12 +1,52 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import "./index.css";
-
 import { RouterProvider } from "react-router-dom";
-import router from "./component/router/router";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { Toaster } from "react-hot-toast";
 
-createRoot(document.getElementById("root")).render(
+import "./index.css";
+import router from "./component/router/router";
+import AuthProvider from "./component/auth/AuthProvider";
+
+// Create one QueryClient instance for the application.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 5 * 60 * 1000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+const rootElement = document.getElementById("root");
+
+if (!rootElement) {
+  throw new Error('Root element "#root" was not found.');
+}
+
+createRoot(rootElement).render(
   <StrictMode>
-    <RouterProvider router={router}></RouterProvider>
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <RouterProvider router={router} />
+
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 3000,
+            style: {
+              borderRadius: "12px",
+            },
+            success: {
+              duration: 3000,
+            },
+            error: {
+              duration: 4000,
+            },
+          }}
+        />
+      </AuthProvider>
+    </QueryClientProvider>
   </StrictMode>,
 );

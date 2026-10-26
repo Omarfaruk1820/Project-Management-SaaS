@@ -12,36 +12,67 @@ import {
 } from "react-icons/fi";
 
 import useAuth from "../hooks/useAuth";
-import useAxiosPublic from "../hooks/useAxiosPublic";
 import GoogleSignIn from "../auth/GoogleSignIn";
 
-const getAuthErrorMessage = (err) => {
+const getAuthErrorMessage = (err, accountCreated = false) => {
+  if (accountCreated && err?.status === 401) {
+    return "Firebase account তৈরি হয়েছে, কিন্তু authentication token গ্রহণ করা হয়নি। আবার login করে চেষ্টা করো।";
+  }
+
+  if (accountCreated) {
+    return "Firebase account তৈরি হয়েছে, কিন্তু MongoDB-তে profile save হয়নি। আবার login করে profile sync করার চেষ্টা করো।";
+  }
+
   switch (err?.code) {
     case "auth/email-already-in-use":
-      return "এই email দিয়ে account আগে থেকেই আছে। Login করো।";
+      return "এই email দিয়ে account আগে থেকেই আছে। Login করো.";
+
     case "auth/invalid-email":
       return "সঠিক email address দাও।";
+
     case "auth/weak-password":
       return "আরও শক্তিশালী password ব্যবহার করো।";
+
     case "auth/network-request-failed":
       return "Network connection check করে আবার চেষ্টা করো।";
-    case "auth/popup-closed-by-user":
-      return "Google sign-in window বন্ধ হয়ে গেছে। আবার চেষ্টা করো।";
-    case "auth/popup-blocked":
-      return "Browser popup block করেছে। Popup allow করে আবার চেষ্টা করো।";
+
+    case "auth/operation-not-allowed":
+      return "Firebase Console-এ এই sign-in method enable করা নেই।";
+
+    case "auth/too-many-requests":
+      return "অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করো।";
+
+    case "auth/invalid-credential":
+      return "Login information সঠিক নয় অথবা মেয়াদ শেষ হয়েছে। আবার চেষ্টা করো।";
+
     default:
-      return (
-        err?.response?.data?.message ||
-        err?.message ||
-        "Registration ব্যর্থ হয়েছে। আবার চেষ্টা করো।"
-      );
+      if (err?.status === 401) {
+        return "Authentication token invalid বা expired। আবার login করে চেষ্টা করো।";
+      }
+
+      if (err?.status === 403) {
+        return "এই account ব্যবহার করার অনুমতি নেই।";
+      }
+
+      if (err?.status === 404) {
+        return "Profile API পাওয়া যায়নি। Backend route configuration পরীক্ষা করো।";
+      }
+
+      if (err?.status >= 500) {
+        return "Server-এ সমস্যা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করো।";
+      }
+
+      return err?.message || "Registration ব্যর্থ হয়েছে। আবার চেষ্টা করো।";
   }
 };
 
+const isPasswordStrong = (password) =>
+  password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
+
 const Register = () => {
   const navigate = useNavigate();
-  const { userRegister, loading: authLoading } = useAuth();
-  const axiosPublic = useAxiosPublic();
+
+  const { userRegister, syncUserProfile, loading: authLoading } = useAuth();
 
   const [formData, setFormData] = useState({
     fullName: "",
@@ -56,6 +87,8 @@ const Register = () => {
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  const busy = authLoading || isSubmitting;
+
   const updateField = (event) => {
     const { name, value, type, checked } = event.target;
 
@@ -64,108 +97,141 @@ const Register = () => {
       [name]: type === "checkbox" ? checked : value,
     }));
 
-    setError("");
+    if (error) setError("");
   };
 
-  const isPasswordStrong = (password) =>
-    password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
-
-  // Create/update MongoDB profile using a verified Firebase token.
-  const syncUserProfile = async (firebaseUser, displayName) => {
-    const idToken = await firebaseUser.getIdToken();
-
-    await axiosPublic.post(
-      "/users",
-      {
-        uid: firebaseUser.uid,
-        name: displayName || firebaseUser.displayName || "",
-        email: firebaseUser.email,
-        photoURL: firebaseUser.photoURL || "",
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${idToken}`,
-        },
-      },
-    );
-  };
-
-  const handleSubmit = async (event) => {
-    event.preventDefault();
-    setError("");
-
+  const validateForm = () => {
     const fullName = formData.fullName.trim();
     const email = formData.email.trim();
     const { password, confirmPassword, agreeToTerms } = formData;
 
     if (!fullName) {
-      setError("তোমার নাম লিখো।");
-      return;
+      return "তোমার নাম লিখো।";
+    }
+
+    if (fullName.length > 100) {
+      return "নাম ১০০ অক্ষরের মধ্যে রাখো।";
+    }
+
+    if (!email) {
+      return "Email address লিখো।";
+    }
+
+    if (password.length > 128) {
+      return "Password ১২৮ অক্ষরের মধ্যে রাখো।";
     }
 
     if (!isPasswordStrong(password)) {
-      setError(
-        "Password অন্তত ৮ অক্ষরের হতে হবে এবং letter ও number থাকতে হবে।",
-      );
-      return;
+      return "Password অন্তত ৮ অক্ষরের হতে হবে এবং letter ও number থাকতে হবে।";
     }
 
     if (password !== confirmPassword) {
-      setError("দুটি password মিলছে না।");
-      return;
+      return "দুটি password মিলছে না।";
     }
 
     if (!agreeToTerms) {
-      setError("Terms of Service এবং Privacy Policy accept করো।");
+      return "Terms of Service এবং Privacy Policy accept করো।";
+    }
+
+    return "";
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+
+    if (busy) return;
+
+    setError("");
+
+    const validationError = validateForm();
+
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
+    setIsSubmitting(true);
+
+    let firebaseAccountCreated = false;
+
     try {
-      setIsSubmitting(true);
+      // 1. Create the Firebase account.
+      const credential = await userRegister(
+        formData.fullName.trim(),
+        formData.email.trim(),
+        formData.password,
+      );
 
-      const credential = await userRegister(fullName, email, password);
+      firebaseAccountCreated = true;
 
-      await syncUserProfile(credential.user, fullName);
+      // 2. Save the profile in MongoDB.
+      await syncUserProfile(credential.user, {
+        name: formData.fullName.trim(),
+        photoURL: credential.user.photoURL || "",
+      });
 
+      // 3. Navigate only after the profile sync succeeds.
       navigate("/onboarding", { replace: true });
     } catch (err) {
-      console.error("Registration failed:", err);
-      setError(getAuthErrorMessage(err));
+      console.error("Registration failed:", {
+        code: err?.code,
+        status: err?.status,
+        message: err?.message,
+      });
+
+      setError(getAuthErrorMessage(err, firebaseAccountCreated));
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleGoogleSuccess = async (credential) => {
+    if (busy) return;
+
     setError("");
+    setIsSubmitting(true);
+
+    let firebaseAccountCreated = false;
 
     try {
-      setIsSubmitting(true);
+      const firebaseUser = credential?.user;
 
-      const firebaseUser = credential.user;
+      if (!firebaseUser) {
+        throw new Error("Google sign-in did not return a Firebase user.");
+      }
 
-      // Google profile details come from Firebase's provider response.
-      await syncUserProfile(firebaseUser, firebaseUser.displayName);
+      // Firebase has authenticated the user.
+      firebaseAccountCreated = true;
+
+      // Sync the Firebase profile with MongoDB.
+      await syncUserProfile(firebaseUser, {
+        name: firebaseUser.displayName || "",
+        photoURL: firebaseUser.photoURL || "",
+      });
 
       navigate("/onboarding", { replace: true });
     } catch (err) {
-      console.error("Google registration/profile sync failed:", err);
-      setError(
-        `Google sign-in হয়েছে, কিন্তু profile save করা যায়নি। Retry করো। ${getAuthErrorMessage(err)}`,
-      );
+      console.error("Google profile sync failed:", {
+        code: err?.code,
+        status: err?.status,
+        message: err?.message,
+      });
+
+      setError(getAuthErrorMessage(err, firebaseAccountCreated));
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const busy = authLoading || isSubmitting;
-
   return (
     <main className="min-h-screen bg-base-100 text-base-content">
       <div className="grid min-h-screen lg:grid-cols-2">
-        {/* Brand / product panel */}
+        {/* Brand panel */}
         <section className="relative hidden overflow-hidden bg-slate-950 px-10 py-10 text-white lg:flex lg:flex-col xl:px-16">
-          <div className="pointer-events-none absolute inset-0">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0"
+          >
             <div className="absolute -left-28 -top-28 h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
             <div className="absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-indigo-500/20 blur-3xl" />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.08)_1px,transparent_0)] [background-size:28px_28px]" />
@@ -178,16 +244,17 @@ const Register = () => {
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500">
               <FiLayers className="text-xl" />
             </span>
+
             <span className="text-xl font-bold tracking-tight">TaskFlow</span>
           </Link>
 
           <div className="relative z-10 my-auto max-w-xl py-14">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-violet-200">
-              <FiZap />A clearer way to work together
+              <FiZap aria-hidden="true" />A clearer way to work together
             </div>
 
             <h1 className="text-4xl font-semibold leading-tight tracking-tight xl:text-5xl">
-              Bring your team's
+              Bring your team&apos;s
               <span className="block bg-gradient-to-r from-violet-300 to-indigo-300 bg-clip-text text-transparent">
                 best work to life.
               </span>
@@ -202,10 +269,12 @@ const Register = () => {
               <div className="flex items-center justify-between border-b border-white/10 pb-4">
                 <div>
                   <p className="text-sm font-semibold">Website redesign</p>
+
                   <p className="mt-1 text-xs text-slate-400">
                     Workspace · Product team
                   </p>
                 </div>
+
                 <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs text-emerald-300">
                   On track
                 </span>
@@ -213,12 +282,18 @@ const Register = () => {
 
               <div className="mt-4 grid grid-cols-3 gap-3">
                 {[
-                  { title: "To do", tasks: ["Research", "Wireframes"] },
+                  {
+                    title: "To do",
+                    tasks: ["Research", "Wireframes"],
+                  },
                   {
                     title: "In progress",
                     tasks: ["Landing page", "Design system"],
                   },
-                  { title: "Done", tasks: ["Kickoff", "Project brief"] },
+                  {
+                    title: "Done",
+                    tasks: ["Kickoff", "Project brief"],
+                  },
                 ].map((column) => (
                   <div
                     key={column.title}
@@ -227,6 +302,7 @@ const Register = () => {
                     <p className="mb-3 text-[11px] font-medium text-slate-300">
                       {column.title}
                     </p>
+
                     {column.tasks.map((task) => (
                       <div
                         key={task}
@@ -252,10 +328,12 @@ const Register = () => {
             <div className="mb-8 flex items-center justify-between lg:hidden">
               <Link to="/" className="inline-flex items-center gap-2.5">
                 <span className="grid h-9 w-9 place-items-center rounded-xl bg-violet-600 text-white">
-                  <FiLayers />
+                  <FiLayers aria-hidden="true" />
                 </span>
+
                 <span className="text-lg font-bold">TaskFlow</span>
               </Link>
+
               <Link to="/login" className="text-sm font-medium text-primary">
                 Sign in
               </Link>
@@ -265,9 +343,11 @@ const Register = () => {
               <p className="mb-3 text-sm font-semibold text-primary">
                 GET STARTED FOR FREE
               </p>
+
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
                 Create your account
               </h2>
+
               <p className="mt-3 text-sm leading-6 text-base-content/60">
                 Start organizing your projects and bringing your team together.
               </p>
@@ -275,19 +355,22 @@ const Register = () => {
 
             <GoogleSignIn
               onSuccess={handleGoogleSuccess}
+              onError={() => setError("")}
               disabled={busy}
-              onError={(err) => setError(getAuthErrorMessage(err))}
+              label="Continue with Google"
             />
 
             <div className="my-6 flex items-center gap-4">
               <div className="h-px flex-1 bg-base-300" />
+
               <span className="text-xs font-medium text-base-content/40">
                 OR SIGN UP WITH EMAIL
               </span>
+
               <div className="h-px flex-1 bg-base-300" />
             </div>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={handleSubmit} className="space-y-4" noValidate>
               <div>
                 <label
                   htmlFor="fullName"
@@ -295,8 +378,13 @@ const Register = () => {
                 >
                   Full name
                 </label>
+
                 <div className="relative">
-                  <FiUser className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiUser
+                    aria-hidden="true"
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+
                   <input
                     id="fullName"
                     name="fullName"
@@ -306,6 +394,7 @@ const Register = () => {
                     value={formData.fullName}
                     onChange={updateField}
                     required
+                    maxLength={100}
                     disabled={busy}
                     className="input input-bordered h-12 w-full pl-10"
                   />
@@ -319,8 +408,13 @@ const Register = () => {
                 >
                   Email address
                 </label>
+
                 <div className="relative">
-                  <FiMail className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiMail
+                    aria-hidden="true"
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+
                   <input
                     id="email"
                     name="email"
@@ -330,6 +424,7 @@ const Register = () => {
                     value={formData.email}
                     onChange={updateField}
                     required
+                    maxLength={254}
                     disabled={busy}
                     className="input input-bordered h-12 w-full pl-10"
                   />
@@ -343,8 +438,13 @@ const Register = () => {
                 >
                   Password
                 </label>
+
                 <div className="relative">
-                  <FiLock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiLock
+                    aria-hidden="true"
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+
                   <input
                     id="password"
                     name="password"
@@ -355,20 +455,25 @@ const Register = () => {
                     onChange={updateField}
                     required
                     minLength={8}
+                    maxLength={128}
                     disabled={busy}
                     className="input input-bordered h-12 w-full pl-10 pr-12"
                   />
+
                   <button
                     type="button"
                     aria-label={
                       showPassword ? "Hide password" : "Show password"
                     }
+                    aria-pressed={showPassword}
                     onClick={() => setShowPassword((shown) => !shown)}
+                    disabled={busy}
                     className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
                   >
                     {showPassword ? <FiEyeOff /> : <FiEye />}
                   </button>
                 </div>
+
                 <p className="mt-1.5 text-xs text-base-content/50">
                   8+ characters, including a letter and a number.
                 </p>
@@ -381,8 +486,13 @@ const Register = () => {
                 >
                   Confirm password
                 </label>
+
                 <div className="relative">
-                  <FiLock className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiLock
+                    aria-hidden="true"
+                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+
                   <input
                     id="confirmPassword"
                     name="confirmPassword"
@@ -392,9 +502,11 @@ const Register = () => {
                     value={formData.confirmPassword}
                     onChange={updateField}
                     required
+                    maxLength={128}
                     disabled={busy}
                     className="input input-bordered h-12 w-full pl-10 pr-12"
                   />
+
                   <button
                     type="button"
                     aria-label={
@@ -402,7 +514,9 @@ const Register = () => {
                         ? "Hide confirm password"
                         : "Show confirm password"
                     }
+                    aria-pressed={showConfirmPassword}
                     onClick={() => setShowConfirmPassword((shown) => !shown)}
+                    disabled={busy}
                     className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
                   >
                     {showConfirmPassword ? <FiEyeOff /> : <FiEye />}
@@ -419,6 +533,7 @@ const Register = () => {
                   disabled={busy}
                   className="checkbox checkbox-primary checkbox-sm mt-0.5"
                 />
+
                 <span className="leading-5">
                   I agree to the{" "}
                   <Link
@@ -461,7 +576,7 @@ const Register = () => {
                 ) : (
                   <>
                     Create account
-                    <FiArrowRight />
+                    <FiArrowRight aria-hidden="true" />
                   </>
                 )}
               </button>

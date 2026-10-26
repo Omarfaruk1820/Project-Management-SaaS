@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
 import {
   FiArrowRight,
   FiCheck,
@@ -38,10 +39,15 @@ const getLoginErrorMessage = (err) => {
       return "The Google sign-in window was closed.";
 
     case "auth/popup-blocked":
-      return "Your browser blocked the Google sign-in popup. Allow popups and try again.";
+      return "Your browser blocked the Google sign-in popup.";
+
+    case "auth/operation-not-allowed":
+      return "This sign-in method is currently unavailable.";
 
     default:
-      return "Unable to sign in. Please try again.";
+      return err?.message && !err?.code
+        ? err.message
+        : "Unable to sign in. Please try again.";
   }
 };
 
@@ -58,11 +64,14 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleSubmitting, setIsGoogleSubmitting] = useState(false);
 
-  // Redirect users who already have an active Firebase session.
+  const isBusy = loading || isSubmitting || isGoogleSubmitting;
+
+  // Redirect an already authenticated user to the home page.
   useEffect(() => {
     if (!loading && user) {
-      navigate("/dashboard", { replace: true });
+      navigate("/", { replace: true });
     }
   }, [loading, user, navigate]);
 
@@ -74,16 +83,22 @@ const Login = () => {
       [name]: type === "checkbox" ? checked : value,
     }));
 
-    setError("");
+    if (error) {
+      setError("");
+    }
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
+    if (isBusy) return;
+
     setError("");
 
     const email = formData.email.trim();
+    const password = formData.password;
 
-    if (!email || !formData.password) {
+    if (!email || !password) {
       setError("Please enter your email and password.");
       return;
     }
@@ -91,35 +106,50 @@ const Login = () => {
     try {
       setIsSubmitting(true);
 
-      // Firebase email/password authentication.
       // AuthProvider should apply the rememberMe persistence preference.
-      await userLogin(email, formData.password, formData.rememberMe);
+      await userLogin(email, password, formData.rememberMe);
 
-      navigate("/dashboard", { replace: true });
+      toast.success("Login successful!");
+      navigate("/", { replace: true });
     } catch (err) {
-      setError(getLoginErrorMessage(err));
+      const message = getLoginErrorMessage(err);
+      setError(message);
+      toast.error(message);
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleGoogleSuccess = async () => {
-    // GoogleSignIn has already authenticated with Firebase.
-    navigate("/dashboard", { replace: true });
-  };
+  const handleGoogleSuccess = useCallback(() => {
+    // GoogleSignIn must call this only after successful authentication.
+    toast.success("Login successful!");
+    navigate("/", { replace: true });
+  }, [navigate]);
 
-  const handleGoogleError = (err) => {
-    setError(getLoginErrorMessage(err));
-  };
+  const handleGoogleError = useCallback((err) => {
+    const message = getLoginErrorMessage(err);
+    setError(message);
+    toast.error(message);
+  }, []);
 
-  const isBusy = loading || isSubmitting;
+  const handleGoogleStart = useCallback(() => {
+    setError("");
+    setIsGoogleSubmitting(true);
+  }, []);
+
+  const handleGoogleFinish = useCallback(() => {
+    setIsGoogleSubmitting(false);
+  }, []);
 
   return (
     <main className="min-h-screen bg-base-100 text-base-content">
       <div className="grid min-h-screen lg:grid-cols-2">
-        {/* Left: brand and product preview */}
-        <section className="relative hidden overflow-hidden bg-slate-950 px-10 py-10 text-white lg:flex lg:flex-col xl:px-16">
-          <div className="pointer-events-none absolute inset-0">
+        {/* Brand and product preview */}
+        <section className="relative hidden overflow-hidden bg-slate-950 px-8 py-8 text-white sm:px-10 lg:flex lg:flex-col xl:px-16 xl:py-10">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-0 overflow-hidden"
+          >
             <div className="absolute -left-28 -top-28 h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
             <div className="absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-indigo-500/20 blur-3xl" />
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.08)_1px,transparent_0)] [background-size:28px_28px]" />
@@ -127,6 +157,7 @@ const Login = () => {
 
           <Link
             to="/"
+            aria-label="TaskFlow home"
             className="relative z-10 inline-flex w-fit items-center gap-3"
           >
             <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500 text-white shadow-lg shadow-violet-500/25">
@@ -135,7 +166,7 @@ const Login = () => {
             <span className="text-xl font-bold tracking-tight">TaskFlow</span>
           </Link>
 
-          <div className="relative z-10 my-auto max-w-xl py-14">
+          <div className="relative z-10 my-auto max-w-xl py-10 xl:py-14">
             <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-medium text-violet-200">
               <FiZap />
               Your workspace, ready when you are
@@ -154,7 +185,7 @@ const Login = () => {
             </p>
 
             {/* Decorative dashboard preview */}
-            <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.07] p-5 shadow-2xl shadow-black/20 backdrop-blur-sm">
+            <div className="mt-8 rounded-2xl border border-white/10 bg-white/[0.07] p-4 shadow-2xl shadow-black/20 backdrop-blur-sm sm:p-5 xl:mt-10">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <p className="text-sm font-semibold">Your week at a glance</p>
@@ -162,15 +193,16 @@ const Login = () => {
                     Product team workspace
                   </p>
                 </div>
-                <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">
+
+                <span className="shrink-0 rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs font-medium text-emerald-300">
                   In focus
                 </span>
               </div>
 
-              <div className="mt-5 grid grid-cols-2 gap-3">
+              <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="rounded-xl border border-white/[0.06] bg-slate-900/80 p-4">
                   <p className="text-xs text-slate-400">Tasks completed</p>
-                  <div className="mt-2 flex items-end gap-2">
+                  <div className="mt-2 flex flex-wrap items-end gap-2">
                     <span className="text-2xl font-semibold">24</span>
                     <span className="pb-1 text-xs text-emerald-300">
                       +6 this week
@@ -183,7 +215,7 @@ const Login = () => {
 
                 <div className="rounded-xl border border-white/[0.06] bg-slate-900/80 p-4">
                   <p className="text-xs text-slate-400">Project progress</p>
-                  <div className="mt-2 flex items-end gap-2">
+                  <div className="mt-2 flex flex-wrap items-end gap-2">
                     <span className="text-2xl font-semibold">78%</span>
                     <span className="pb-1 text-xs text-slate-400">
                       On schedule
@@ -196,7 +228,7 @@ const Login = () => {
               </div>
 
               <div className="mt-3 rounded-xl bg-slate-900/80 p-4">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <p className="text-xs font-medium text-slate-300">
                     Today’s priorities
                   </p>
@@ -213,7 +245,7 @@ const Login = () => {
                     className="mt-3 flex items-center gap-3 text-xs text-slate-300"
                   >
                     <span
-                      className={`grid h-4 w-4 place-items-center rounded-full border ${
+                      className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border ${
                         index === 0
                           ? "border-emerald-400 bg-emerald-400/10 text-emerald-300"
                           : "border-slate-600 text-transparent"
@@ -221,6 +253,7 @@ const Login = () => {
                     >
                       {index === 0 && <FiCheck className="text-[10px]" />}
                     </span>
+
                     <span
                       className={
                         index === 0 ? "text-slate-500 line-through" : ""
@@ -245,7 +278,7 @@ const Login = () => {
             </div>
           </div>
 
-          <div className="relative z-10 flex items-center justify-between text-xs text-slate-500">
+          <div className="relative z-10 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
             <span>© {new Date().getFullYear()} TaskFlow</span>
             <span className="inline-flex items-center gap-2">
               <FiShield />
@@ -254,11 +287,16 @@ const Login = () => {
           </div>
         </section>
 
-        {/* Right: login form */}
-        <section className="flex items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
+        {/* Login form */}
+        <section className="flex min-h-screen items-center justify-center px-4 py-8 sm:px-8 sm:py-10 lg:px-12">
           <div className="w-full max-w-md">
-            <div className="mb-8 flex items-center justify-between lg:hidden">
-              <Link to="/" className="inline-flex items-center gap-2.5">
+            {/* Mobile brand */}
+            <div className="mb-8 flex items-center justify-between gap-3 lg:hidden">
+              <Link
+                to="/"
+                aria-label="TaskFlow home"
+                className="inline-flex items-center gap-2.5"
+              >
                 <span className="grid h-9 w-9 place-items-center rounded-xl bg-violet-600 text-white">
                   <FiLayers className="text-lg" />
                 </span>
@@ -274,12 +312,14 @@ const Login = () => {
             </div>
 
             <div className="mb-8">
-              <p className="mb-3 text-sm font-semibold text-primary">
+              <p className="mb-3 text-sm font-semibold tracking-wide text-primary">
                 WELCOME BACK
               </p>
+
               <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
                 Sign in to TaskFlow
               </h2>
+
               <p className="mt-3 text-sm leading-6 text-base-content/60">
                 Enter your account details to access your workspace.
               </p>
@@ -288,13 +328,15 @@ const Login = () => {
             <GoogleSignIn
               onSuccess={handleGoogleSuccess}
               onError={handleGoogleError}
+              onStart={handleGoogleStart}
+              onFinally={handleGoogleFinish}
               disabled={isBusy}
               label="Continue with Google"
             />
 
             <div className="my-6 flex items-center gap-4">
               <div className="h-px flex-1 bg-base-300" />
-              <span className="text-xs font-medium text-base-content/40">
+              <span className="shrink-0 text-center text-[10px] font-medium tracking-wide text-base-content/40 sm:text-xs">
                 OR SIGN IN WITH EMAIL
               </span>
               <div className="h-px flex-1 bg-base-300" />
@@ -308,13 +350,19 @@ const Login = () => {
                 >
                   Email address
                 </label>
+
                 <div className="relative">
-                  <FiMail className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiMail
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+
                   <input
                     id="email"
                     name="email"
                     type="email"
                     autoComplete="email"
+                    inputMode="email"
                     placeholder="you@company.com"
                     value={formData.email}
                     onChange={updateField}
@@ -330,16 +378,21 @@ const Login = () => {
                   <label htmlFor="password" className="text-sm font-medium">
                     Password
                   </label>
+
                   <Link
                     to="/forgot-password"
-                    className="text-xs font-semibold text-primary transition hover:underline"
+                    className="text-xs font-semibold text-primary transition hover:underline sm:text-sm"
                   >
                     Forgot password?
                   </Link>
                 </div>
 
                 <div className="relative">
-                  <FiLock className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40" />
+                  <FiLock
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+
                   <input
                     id="password"
                     name="password"
@@ -352,6 +405,7 @@ const Login = () => {
                     disabled={isBusy}
                     className="input input-bordered h-12 w-full pl-10 pr-12 focus:border-primary focus:outline-none"
                   />
+
                   <button
                     type="button"
                     aria-label={
@@ -359,7 +413,8 @@ const Login = () => {
                     }
                     aria-pressed={showPassword}
                     onClick={() => setShowPassword((shown) => !shown)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-base-content/50 transition hover:text-base-content"
+                    disabled={isBusy}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 rounded p-1 text-base-content/50 transition hover:text-base-content focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary disabled:cursor-not-allowed"
                   >
                     {showPassword ? <FiEyeOff /> : <FiEye />}
                   </button>
@@ -391,7 +446,7 @@ const Login = () => {
               <button
                 type="submit"
                 disabled={isBusy}
-                className="btn btn-primary h-12 w-full gap-2 normal-case shadow-lg shadow-primary/15 transition hover:-translate-y-0.5 disabled:hover:translate-y-0"
+                className="btn btn-primary h-12 min-h-12 w-full gap-2 normal-case shadow-lg shadow-primary/15 transition hover:-translate-y-0.5 disabled:hover:translate-y-0"
               >
                 {isSubmitting ? (
                   <>
