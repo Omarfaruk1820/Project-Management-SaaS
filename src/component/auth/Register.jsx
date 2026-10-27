@@ -1,598 +1,409 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { FaGoogle } from "react-icons/fa";
 import {
-  FiArrowRight,
+  FiAlertCircle,
   FiEye,
   FiEyeOff,
-  FiLayers,
   FiLock,
   FiMail,
   FiUser,
-  FiZap,
 } from "react-icons/fi";
 
 import useAuth from "../hooks/useAuth";
-import GoogleSignIn from "../auth/GoogleSignIn";
 
-const getAuthErrorMessage = (err, accountCreated = false) => {
-  if (accountCreated && err?.status === 401) {
-    return "Firebase account তৈরি হয়েছে, কিন্তু authentication token গ্রহণ করা হয়নি। আবার login করে চেষ্টা করো।";
+const getAuthErrorMessage = (error) => {
+  if (error?.code === "auth/email-already-in-use") {
+    return "This email is already registered. Please log in.";
   }
 
-  if (accountCreated) {
-    return "Firebase account তৈরি হয়েছে, কিন্তু MongoDB-তে profile save হয়নি। আবার login করে profile sync করার চেষ্টা করো।";
+  if (error?.code === "auth/invalid-email") {
+    return "Please enter a valid email address.";
   }
 
-  switch (err?.code) {
-    case "auth/email-already-in-use":
-      return "এই email দিয়ে account আগে থেকেই আছে। Login করো.";
-
-    case "auth/invalid-email":
-      return "সঠিক email address দাও।";
-
-    case "auth/weak-password":
-      return "আরও শক্তিশালী password ব্যবহার করো।";
-
-    case "auth/network-request-failed":
-      return "Network connection check করে আবার চেষ্টা করো।";
-
-    case "auth/operation-not-allowed":
-      return "Firebase Console-এ এই sign-in method enable করা নেই।";
-
-    case "auth/too-many-requests":
-      return "অনেকবার চেষ্টা করা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করো।";
-
-    case "auth/invalid-credential":
-      return "Login information সঠিক নয় অথবা মেয়াদ শেষ হয়েছে। আবার চেষ্টা করো।";
-
-    default:
-      if (err?.status === 401) {
-        return "Authentication token invalid বা expired। আবার login করে চেষ্টা করো।";
-      }
-
-      if (err?.status === 403) {
-        return "এই account ব্যবহার করার অনুমতি নেই।";
-      }
-
-      if (err?.status === 404) {
-        return "Profile API পাওয়া যায়নি। Backend route configuration পরীক্ষা করো।";
-      }
-
-      if (err?.status >= 500) {
-        return "Server-এ সমস্যা হয়েছে। কিছুক্ষণ পর আবার চেষ্টা করো।";
-      }
-
-      return err?.message || "Registration ব্যর্থ হয়েছে। আবার চেষ্টা করো।";
+  if (error?.code === "auth/weak-password") {
+    return "Your password is too weak. Please use a stronger password.";
   }
+
+  if (error?.code === "auth/popup-closed-by-user") {
+    return "Google sign-in was cancelled.";
+  }
+
+  if (error?.code === "auth/popup-blocked") {
+    return "Your browser blocked the Google sign-in popup.";
+  }
+
+  if (error?.code === "auth/network-request-failed") {
+    return "Network error. Please check your internet connection.";
+  }
+
+  if (error?.status === 401) {
+    return "Authentication failed. Please sign in again.";
+  }
+
+  if (error?.status === 403) {
+    return "You are not allowed to perform this action.";
+  }
+
+  if (error?.status === 404) {
+    return error?.message || "Your user profile was not found on the server.";
+  }
+
+  if (error?.status >= 500) {
+    return "The server encountered an error. Please try again later.";
+  }
+
+  return error?.message || "Registration failed. Please try again.";
 };
-
-const isPasswordStrong = (password) =>
-  password.length >= 8 && /[A-Za-z]/.test(password) && /\d/.test(password);
 
 const Register = () => {
   const navigate = useNavigate();
 
-  const { userRegister, syncUserProfile, loading: authLoading } = useAuth();
+  const {
+    userRegister,
+    userGoogleLogin,
+    syncUserProfile,
+    loading: authLoading,
+  } = useAuth();
 
   const [formData, setFormData] = useState({
     fullName: "",
     email: "",
     password: "",
     confirmPassword: "",
-    agreeToTerms: false,
   });
 
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const busy = authLoading || isSubmitting;
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
-  const updateField = (event) => {
-    const { name, value, type, checked } = event.target;
+  const handleChange = (event) => {
+    const { name, value } = event.target;
 
-    setFormData((current) => ({
-      ...current,
-      [name]: type === "checkbox" ? checked : value,
+    setFormData((previous) => ({
+      ...previous,
+      [name]: value,
     }));
 
-    if (error) setError("");
-  };
-
-  const validateForm = () => {
-    const fullName = formData.fullName.trim();
-    const email = formData.email.trim();
-    const { password, confirmPassword, agreeToTerms } = formData;
-
-    if (!fullName) {
-      return "তোমার নাম লিখো।";
-    }
-
-    if (fullName.length > 100) {
-      return "নাম ১০০ অক্ষরের মধ্যে রাখো।";
-    }
-
-    if (!email) {
-      return "Email address লিখো।";
-    }
-
-    if (password.length > 128) {
-      return "Password ১২৮ অক্ষরের মধ্যে রাখো।";
-    }
-
-    if (!isPasswordStrong(password)) {
-      return "Password অন্তত ৮ অক্ষরের হতে হবে এবং letter ও number থাকতে হবে।";
-    }
-
-    if (password !== confirmPassword) {
-      return "দুটি password মিলছে না।";
-    }
-
-    if (!agreeToTerms) {
-      return "Terms of Service এবং Privacy Policy accept করো।";
-    }
-
-    return "";
+    setErrorMessage("");
+    setSuccessMessage("");
   };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
 
-    if (busy) return;
+    if (submitting || authLoading) return;
 
-    setError("");
+    setErrorMessage("");
+    setSuccessMessage("");
 
-    const validationError = validateForm();
+    const fullName = formData.fullName.trim();
+    const email = formData.email.trim();
 
-    if (validationError) {
-      setError(validationError);
+    if (!fullName) {
+      setErrorMessage("Please enter your full name.");
       return;
     }
 
-    setIsSubmitting(true);
+    if (!email) {
+      setErrorMessage("Please enter your email address.");
+      return;
+    }
+
+    if (formData.password.length < 6) {
+      setErrorMessage("Password must contain at least 6 characters.");
+      return;
+    }
+
+    if (formData.password !== formData.confirmPassword) {
+      setErrorMessage("Passwords do not match.");
+      return;
+    }
+
+    setSubmitting(true);
 
     let firebaseAccountCreated = false;
 
     try {
-      // 1. Create the Firebase account.
-      const credential = await userRegister(
-        formData.fullName.trim(),
-        formData.email.trim(),
-        formData.password,
-      );
+      // Step 1: Create the Firebase account.
+      const credential = await userRegister(fullName, email, formData.password);
 
       firebaseAccountCreated = true;
 
-      // 2. Save the profile in MongoDB.
+      // Step 2: Sync the Firebase user with MongoDB once.
       await syncUserProfile(credential.user, {
-        name: formData.fullName.trim(),
+        name: fullName,
         photoURL: credential.user.photoURL || "",
       });
 
-      // 3. Navigate only after the profile sync succeeds.
+      // Step 3: Continue to onboarding.
       navigate("/onboarding", { replace: true });
-    } catch (err) {
-      console.error("Registration failed:", {
-        code: err?.code,
-        status: err?.status,
-        message: err?.message,
-      });
-
-      setError(getAuthErrorMessage(err, firebaseAccountCreated));
+    } catch (error) {
+      if (firebaseAccountCreated) {
+        setErrorMessage(
+          "Your Firebase account was created, but your profile could not be saved to the server. Please retry the profile sync or sign in again.",
+        );
+      } else {
+        setErrorMessage(getAuthErrorMessage(error));
+      }
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
-  const handleGoogleSuccess = async (credential) => {
-    if (busy) return;
+  const handleGoogleRegister = async () => {
+    if (submitting || authLoading) return;
 
-    setError("");
-    setIsSubmitting(true);
-
-    let firebaseAccountCreated = false;
+    setErrorMessage("");
+    setSuccessMessage("");
+    setSubmitting(true);
 
     try {
-      const firebaseUser = credential?.user;
+      // Step 1: Sign in or register through Google/Firebase.
+      const credential = await userGoogleLogin();
+      const firebaseUser = credential.user;
 
-      if (!firebaseUser) {
-        throw new Error("Google sign-in did not return a Firebase user.");
-      }
-
-      // Firebase has authenticated the user.
-      firebaseAccountCreated = true;
-
-      // Sync the Firebase profile with MongoDB.
+      // Step 2: Create or update the MongoDB profile.
       await syncUserProfile(firebaseUser, {
         name: firebaseUser.displayName || "",
         photoURL: firebaseUser.photoURL || "",
       });
 
+      // Step 3: Continue to onboarding.
       navigate("/onboarding", { replace: true });
-    } catch (err) {
-      console.error("Google profile sync failed:", {
-        code: err?.code,
-        status: err?.status,
-        message: err?.message,
-      });
-
-      setError(getAuthErrorMessage(err, firebaseAccountCreated));
+    } catch (error) {
+      setErrorMessage(getAuthErrorMessage(error));
     } finally {
-      setIsSubmitting(false);
+      setSubmitting(false);
     }
   };
 
-  return (
-    <main className="min-h-screen bg-base-100 text-base-content">
-      <div className="grid min-h-screen lg:grid-cols-2">
-        {/* Brand panel */}
-        <section className="relative hidden overflow-hidden bg-slate-950 px-10 py-10 text-white lg:flex lg:flex-col xl:px-16">
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0"
-          >
-            <div className="absolute -left-28 -top-28 h-96 w-96 rounded-full bg-violet-600/20 blur-3xl" />
-            <div className="absolute -bottom-32 -right-20 h-96 w-96 rounded-full bg-indigo-500/20 blur-3xl" />
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,rgba(255,255,255,0.08)_1px,transparent_0)] [background-size:28px_28px]" />
-          </div>
+  const isBusy = submitting || authLoading;
 
+  return (
+    <main className="min-h-screen bg-slate-950 px-4 py-10 text-white">
+      <div className="mx-auto w-full max-w-md">
+        <div className="mb-8 text-center">
           <Link
             to="/"
-            className="relative z-10 inline-flex w-fit items-center gap-3"
+            className="inline-flex items-center gap-2 text-2xl font-bold"
           >
-            <span className="grid h-10 w-10 place-items-center rounded-xl bg-violet-500">
-              <FiLayers className="text-xl" />
-            </span>
-
-            <span className="text-xl font-bold tracking-tight">TaskFlow</span>
+            <span className="rounded-lg bg-indigo-600 px-3 py-2">TF</span>
+            <span>TaskFlow</span>
           </Link>
 
-          <div className="relative z-10 my-auto max-w-xl py-14">
-            <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs text-violet-200">
-              <FiZap aria-hidden="true" />A clearer way to work together
+          <h1 className="mt-8 text-3xl font-bold">Create your account</h1>
+
+          <p className="mt-2 text-sm text-slate-400">
+            Start managing your projects with TaskFlow.
+          </p>
+        </div>
+
+        <section className="rounded-2xl border border-slate-800 bg-slate-900 p-6 shadow-xl sm:p-8">
+          {errorMessage && (
+            <div
+              role="alert"
+              className="mb-5 flex gap-3 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300"
+            >
+              <FiAlertCircle className="mt-0.5 shrink-0" size={18} />
+              <p>{errorMessage}</p>
             </div>
+          )}
 
-            <h1 className="text-4xl font-semibold leading-tight tracking-tight xl:text-5xl">
-              Bring your team&apos;s
-              <span className="block bg-gradient-to-r from-violet-300 to-indigo-300 bg-clip-text text-transparent">
-                best work to life.
-              </span>
-            </h1>
-
-            <p className="mt-5 max-w-lg text-base leading-7 text-slate-300">
-              Plan projects, organize tasks, and keep your team moving in one
-              collaborative workspace.
+          {successMessage && (
+            <p
+              role="status"
+              className="mb-5 rounded-lg bg-emerald-500/10 p-3 text-sm text-emerald-300"
+            >
+              {successMessage}
             </p>
+          )}
 
-            <div className="mt-10 rounded-2xl border border-white/10 bg-white/[0.07] p-5 backdrop-blur-sm">
-              <div className="flex items-center justify-between border-b border-white/10 pb-4">
-                <div>
-                  <p className="text-sm font-semibold">Website redesign</p>
+          <button
+            type="button"
+            onClick={handleGoogleRegister}
+            disabled={isBusy}
+            className="flex w-full items-center justify-center gap-3 rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 font-medium transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <FaGoogle />
+            {submitting ? "Please wait..." : "Continue with Google"}
+          </button>
 
-                  <p className="mt-1 text-xs text-slate-400">
-                    Workspace · Product team
-                  </p>
-                </div>
-
-                <span className="rounded-full bg-emerald-400/10 px-2.5 py-1 text-xs text-emerald-300">
-                  On track
-                </span>
-              </div>
-
-              <div className="mt-4 grid grid-cols-3 gap-3">
-                {[
-                  {
-                    title: "To do",
-                    tasks: ["Research", "Wireframes"],
-                  },
-                  {
-                    title: "In progress",
-                    tasks: ["Landing page", "Design system"],
-                  },
-                  {
-                    title: "Done",
-                    tasks: ["Kickoff", "Project brief"],
-                  },
-                ].map((column) => (
-                  <div
-                    key={column.title}
-                    className="rounded-xl bg-slate-900/80 p-3"
-                  >
-                    <p className="mb-3 text-[11px] font-medium text-slate-300">
-                      {column.title}
-                    </p>
-
-                    {column.tasks.map((task) => (
-                      <div
-                        key={task}
-                        className="mb-2 rounded-lg border border-white/[0.06] bg-white/[0.04] p-2 text-[10px] text-slate-300"
-                      >
-                        {task}
-                      </div>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="my-6 flex items-center gap-4">
+            <div className="h-px flex-1 bg-slate-700" />
+            <span className="text-xs uppercase text-slate-500">
+              Or register with email
+            </span>
+            <div className="h-px flex-1 bg-slate-700" />
           </div>
 
-          <p className="relative z-10 text-xs text-slate-500">
-            © {new Date().getFullYear()} TaskFlow · Work, organized.
+          <form onSubmit={handleSubmit} className="space-y-5">
+            <div>
+              <label
+                htmlFor="fullName"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Full name
+              </label>
+
+              <div className="relative">
+                <FiUser
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  size={18}
+                />
+
+                <input
+                  id="fullName"
+                  name="fullName"
+                  type="text"
+                  autoComplete="name"
+                  value={formData.fullName}
+                  onChange={handleChange}
+                  placeholder="Enter your full name"
+                  required
+                  disabled={isBusy}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 py-3 pl-10 pr-4 outline-none transition placeholder:text-slate-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="email"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Email address
+              </label>
+
+              <div className="relative">
+                <FiMail
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  size={18}
+                />
+
+                <input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  placeholder="you@example.com"
+                  required
+                  disabled={isBusy}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 py-3 pl-10 pr-4 outline-none transition placeholder:text-slate-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="password"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Password
+              </label>
+
+              <div className="relative">
+                <FiLock
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  size={18}
+                />
+
+                <input
+                  id="password"
+                  name="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={formData.password}
+                  onChange={handleChange}
+                  placeholder="At least 6 characters"
+                  minLength={6}
+                  required
+                  disabled={isBusy}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 py-3 pl-10 pr-12 outline-none transition placeholder:text-slate-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60"
+                />
+
+                <button
+                  type="button"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  onClick={() => setShowPassword((value) => !value)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                >
+                  {showPassword ? <FiEyeOff /> : <FiEye />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label
+                htmlFor="confirmPassword"
+                className="mb-2 block text-sm font-medium text-slate-300"
+              >
+                Confirm password
+              </label>
+
+              <div className="relative">
+                <FiLock
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500"
+                  size={18}
+                />
+
+                <input
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  type={showConfirmPassword ? "text" : "password"}
+                  autoComplete="new-password"
+                  value={formData.confirmPassword}
+                  onChange={handleChange}
+                  placeholder="Re-enter your password"
+                  required
+                  disabled={isBusy}
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 py-3 pl-10 pr-12 outline-none transition placeholder:text-slate-600 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 disabled:opacity-60"
+                />
+
+                <button
+                  type="button"
+                  aria-label={
+                    showConfirmPassword
+                      ? "Hide confirm password"
+                      : "Show confirm password"
+                  }
+                  onClick={() => setShowConfirmPassword((value) => !value)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                >
+                  {showConfirmPassword ? <FiEyeOff /> : <FiEye />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isBusy}
+              className="w-full rounded-lg bg-indigo-600 px-4 py-3 font-semibold transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {submitting ? "Creating account..." : "Create account"}
+            </button>
+          </form>
+
+          <p className="mt-6 text-center text-sm text-slate-400">
+            Already have an account?{" "}
+            <Link
+              to="/login"
+              className="font-semibold text-indigo-400 hover:text-indigo-300"
+            >
+              Log in
+            </Link>
           </p>
         </section>
 
-        {/* Registration form */}
-        <section className="flex items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
-          <div className="w-full max-w-md">
-            <div className="mb-8 flex items-center justify-between lg:hidden">
-              <Link to="/" className="inline-flex items-center gap-2.5">
-                <span className="grid h-9 w-9 place-items-center rounded-xl bg-violet-600 text-white">
-                  <FiLayers aria-hidden="true" />
-                </span>
-
-                <span className="text-lg font-bold">TaskFlow</span>
-              </Link>
-
-              <Link to="/login" className="text-sm font-medium text-primary">
-                Sign in
-              </Link>
-            </div>
-
-            <div className="mb-8">
-              <p className="mb-3 text-sm font-semibold text-primary">
-                GET STARTED FOR FREE
-              </p>
-
-              <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">
-                Create your account
-              </h2>
-
-              <p className="mt-3 text-sm leading-6 text-base-content/60">
-                Start organizing your projects and bringing your team together.
-              </p>
-            </div>
-
-            <GoogleSignIn
-              onSuccess={handleGoogleSuccess}
-              onError={() => setError("")}
-              disabled={busy}
-              label="Continue with Google"
-            />
-
-            <div className="my-6 flex items-center gap-4">
-              <div className="h-px flex-1 bg-base-300" />
-
-              <span className="text-xs font-medium text-base-content/40">
-                OR SIGN UP WITH EMAIL
-              </span>
-
-              <div className="h-px flex-1 bg-base-300" />
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4" noValidate>
-              <div>
-                <label
-                  htmlFor="fullName"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  Full name
-                </label>
-
-                <div className="relative">
-                  <FiUser
-                    aria-hidden="true"
-                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
-                  />
-
-                  <input
-                    id="fullName"
-                    name="fullName"
-                    type="text"
-                    autoComplete="name"
-                    placeholder="Alex Morgan"
-                    value={formData.fullName}
-                    onChange={updateField}
-                    required
-                    maxLength={100}
-                    disabled={busy}
-                    className="input input-bordered h-12 w-full pl-10"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="email"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  Email address
-                </label>
-
-                <div className="relative">
-                  <FiMail
-                    aria-hidden="true"
-                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
-                  />
-
-                  <input
-                    id="email"
-                    name="email"
-                    type="email"
-                    autoComplete="email"
-                    placeholder="alex@company.com"
-                    value={formData.email}
-                    onChange={updateField}
-                    required
-                    maxLength={254}
-                    disabled={busy}
-                    className="input input-bordered h-12 w-full pl-10"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="password"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  Password
-                </label>
-
-                <div className="relative">
-                  <FiLock
-                    aria-hidden="true"
-                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
-                  />
-
-                  <input
-                    id="password"
-                    name="password"
-                    type={showPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    placeholder="At least 8 characters"
-                    value={formData.password}
-                    onChange={updateField}
-                    required
-                    minLength={8}
-                    maxLength={128}
-                    disabled={busy}
-                    className="input input-bordered h-12 w-full pl-10 pr-12"
-                  />
-
-                  <button
-                    type="button"
-                    aria-label={
-                      showPassword ? "Hide password" : "Show password"
-                    }
-                    aria-pressed={showPassword}
-                    onClick={() => setShowPassword((shown) => !shown)}
-                    disabled={busy}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
-                  >
-                    {showPassword ? <FiEyeOff /> : <FiEye />}
-                  </button>
-                </div>
-
-                <p className="mt-1.5 text-xs text-base-content/50">
-                  8+ characters, including a letter and a number.
-                </p>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="confirmPassword"
-                  className="mb-2 block text-sm font-medium"
-                >
-                  Confirm password
-                </label>
-
-                <div className="relative">
-                  <FiLock
-                    aria-hidden="true"
-                    className="absolute left-3.5 top-1/2 -translate-y-1/2 text-base-content/40"
-                  />
-
-                  <input
-                    id="confirmPassword"
-                    name="confirmPassword"
-                    type={showConfirmPassword ? "text" : "password"}
-                    autoComplete="new-password"
-                    placeholder="Re-enter your password"
-                    value={formData.confirmPassword}
-                    onChange={updateField}
-                    required
-                    maxLength={128}
-                    disabled={busy}
-                    className="input input-bordered h-12 w-full pl-10 pr-12"
-                  />
-
-                  <button
-                    type="button"
-                    aria-label={
-                      showConfirmPassword
-                        ? "Hide confirm password"
-                        : "Show confirm password"
-                    }
-                    aria-pressed={showConfirmPassword}
-                    onClick={() => setShowConfirmPassword((shown) => !shown)}
-                    disabled={busy}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-base-content/50"
-                  >
-                    {showConfirmPassword ? <FiEyeOff /> : <FiEye />}
-                  </button>
-                </div>
-              </div>
-
-              <label className="flex cursor-pointer items-start gap-3 pt-1 text-sm text-base-content/70">
-                <input
-                  type="checkbox"
-                  name="agreeToTerms"
-                  checked={formData.agreeToTerms}
-                  onChange={updateField}
-                  disabled={busy}
-                  className="checkbox checkbox-primary checkbox-sm mt-0.5"
-                />
-
-                <span className="leading-5">
-                  I agree to the{" "}
-                  <Link
-                    to="/terms"
-                    className="font-medium text-primary hover:underline"
-                  >
-                    Terms of Service
-                  </Link>{" "}
-                  and{" "}
-                  <Link
-                    to="/privacy"
-                    className="font-medium text-primary hover:underline"
-                  >
-                    Privacy Policy
-                  </Link>
-                  .
-                </span>
-              </label>
-
-              {error && (
-                <div
-                  role="alert"
-                  aria-live="polite"
-                  className="alert alert-error text-sm"
-                >
-                  <span>{error}</span>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={busy}
-                className="btn btn-primary h-12 w-full gap-2 normal-case"
-              >
-                {isSubmitting ? (
-                  <>
-                    <span className="loading loading-spinner loading-sm" />
-                    Creating account...
-                  </>
-                ) : (
-                  <>
-                    Create account
-                    <FiArrowRight aria-hidden="true" />
-                  </>
-                )}
-              </button>
-            </form>
-
-            <p className="mt-6 text-center text-sm text-base-content/60">
-              Already have an account?{" "}
-              <Link
-                to="/login"
-                className="font-semibold text-primary hover:underline"
-              >
-                Sign in
-              </Link>
-            </p>
-          </div>
-        </section>
+        <p className="mt-6 text-center text-xs text-slate-500">
+          By creating an account, you agree to the terms of service and privacy
+          policy.
+        </p>
       </div>
     </main>
   );

@@ -1,4 +1,12 @@
 import {
+  createContext,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import {
   createUserWithEmailAndPassword,
   GoogleAuthProvider,
   onAuthStateChanged,
@@ -8,19 +16,9 @@ import {
   updateProfile,
 } from "firebase/auth";
 
-import {
-  createContext,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
-
 import auth from "../auth/firebase.config";
 
 export const AuthContext = createContext(null);
-
-const googleProvider = new GoogleAuthProvider();
 
 const API_BASE_URL = (
   import.meta.env.VITE_API_URL || "http://localhost:5000"
@@ -29,24 +27,27 @@ const API_BASE_URL = (
 const AUTH_API_URL = `${API_BASE_URL}/api/v1/auth`;
 const USERS_API_URL = `${API_BASE_URL}/api/v1/users`;
 
+const googleProvider = new GoogleAuthProvider();
+
 const readResponse = async (response) => {
   const contentType = response.headers.get("content-type") || "";
-  let data = null;
+
+  let data;
 
   if (contentType.includes("application/json")) {
-    data = await response.json().catch(() => null);
+    data = await response.json();
   } else {
-    const text = await response.text().catch(() => "");
-    data = text ? { message: text } : null;
+    const text = await response.text();
+    data = text ? { message: text } : {};
   }
 
   if (!response.ok || data?.success === false) {
     const error = new Error(
-      data?.message || `Request failed (${response.status}).`,
+      data?.message || `Request failed with status ${response.status}`,
     );
 
     error.status = response.status;
-    error.code = data?.code || null;
+    error.code = data?.code;
     error.responseData = data;
 
     throw error;
@@ -60,25 +61,48 @@ const authenticatedRequest = async (firebaseUser, url, options = {}) => {
     throw new Error("You must be signed in to perform this request.");
   }
 
-  const idToken = await firebaseUser.getIdToken(true);
+  const idToken = await firebaseUser.getIdToken();
+
+  const headers = new Headers(options.headers || {});
+
+  headers.set("Authorization", `Bearer ${idToken}`);
+
+  if (options.body && !headers.has("Content-Type")) {
+    headers.set("Content-Type", "application/json");
+  }
 
   const response = await fetch(url, {
     ...options,
-    headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...options.headers,
-      Authorization: `Bearer ${idToken}`,
-    },
+    headers,
   });
 
   return readResponse(response);
 };
 
-const AuthProvider = ({ children }) => {
+export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Observe Firebase authentication state.
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(
+      auth,
+      (firebaseUser) => {
+        setUser(firebaseUser);
+        setLoading(false);
+      },
+      (authError) => {
+        setError(authError);
+        setUser(null);
+        setLoading(false);
+      },
+    );
+
+    return unsubscribe;
+  }, []);
+
+  // Register with Firebase only.
   const userRegister = useCallback(async (name, email, password) => {
     setError(null);
 
@@ -96,6 +120,8 @@ const AuthProvider = ({ children }) => {
         displayName: cleanName,
       });
 
+      setUser(credential.user);
+
       return credential;
     } catch (err) {
       setError(err);
@@ -107,7 +133,15 @@ const AuthProvider = ({ children }) => {
     setError(null);
 
     try {
-      return await signInWithEmailAndPassword(auth, email.trim(), password);
+      const credential = await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password,
+      );
+
+      setUser(credential.user);
+
+      return credential;
     } catch (err) {
       setError(err);
       throw err;
@@ -118,136 +152,91 @@ const AuthProvider = ({ children }) => {
     setError(null);
 
     try {
-      return await signInWithPopup(auth, googleProvider);
+      const credential = await signInWithPopup(auth, googleProvider);
+
+      setUser(credential.user);
+
+      return credential;
     } catch (err) {
       setError(err);
       throw err;
     }
   }, []);
 
+  // Synchronize Firebase user data with MongoDB.
   const syncUserProfile = useCallback(async (firebaseUser, profile = {}) => {
     setError(null);
 
     try {
-      if (!firebaseUser?.uid) {
-        throw new Error("A signed-in Firebase user is required.");
-      }
-
       const data = await authenticatedRequest(
         firebaseUser,
         `${USERS_API_URL}/sync`,
         {
           method: "POST",
           body: JSON.stringify({
-            name: profile.name ?? firebaseUser.displayName ?? "",
+            name: profile.name?.trim() || firebaseUser.displayName || "",
             photoURL: profile.photoURL ?? firebaseUser.photoURL ?? "",
           }),
         },
       );
 
-      if (!data?.user) {
-        throw new Error("The server did not return the saved user profile.");
-      }
-
       return data.user;
     } catch (err) {
       setError(err);
-
-      console.error("[syncUserProfile] Failed:", {
-        status: err.status,
-        code: err.code,
-        message: err.message,
-        responseData: err.responseData,
-      });
-
       throw err;
     }
   }, []);
 
+  // Fetch the signed-in user's MongoDB profile.
   const getCurrentUserProfile = useCallback(async () => {
+    const firebaseUser = auth.currentUser;
+
+    if (!firebaseUser) {
+      throw new Error("You must be signed in to get your profile.");
+    }
+
     setError(null);
 
     try {
-      const currentUser = auth.currentUser;
-
-      if (!currentUser) {
-        throw new Error("You must be signed in to load your profile.");
-      }
-
       const data = await authenticatedRequest(
-        currentUser,
+        firebaseUser,
         `${USERS_API_URL}/me`,
-        {
-          method: "GET",
-        },
+        { method: "GET" },
       );
-
-      if (!data?.user) {
-        throw new Error("The server did not return your user profile.");
-      }
 
       return data.user;
     } catch (err) {
       setError(err);
-
-      console.error("[getCurrentUserProfile] Failed:", {
-        status: err.status,
-        code: err.code,
-        message: err.message,
-        responseData: err.responseData,
-      });
-
       throw err;
     }
   }, []);
 
+  // Record logout on the server, then always sign out of Firebase.
   const userLogOut = useCallback(async () => {
     setError(null);
 
-    const currentUser = auth.currentUser;
+    let logoutError = null;
+    const firebaseUser = auth.currentUser;
 
     try {
-      if (currentUser) {
-        try {
-          await authenticatedRequest(
-            currentUser,
-            `${AUTH_API_URL}/session/logout`,
-            {
-              method: "POST",
-            },
-          );
-        } catch (trackingError) {
-          console.warn(
-            "[userLogOut] Backend logout tracking failed:",
-            trackingError.message,
-          );
-        }
+      if (firebaseUser) {
+        await authenticatedRequest(
+          firebaseUser,
+          `${AUTH_API_URL}/session/logout`,
+          { method: "POST" },
+        );
       }
+    } catch (err) {
+      logoutError = err;
+      setError(err);
     } finally {
-      try {
-        await signOut(auth);
-      } catch (err) {
-        setError(err);
-        throw err;
-      }
+      await signOut(auth);
+      setUser(null);
     }
-  }, []);
 
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (currentUser) => {
-        setUser(currentUser);
-        setLoading(false);
-      },
-      (authError) => {
-        setError(authError);
-        setUser(null);
-        setLoading(false);
-      },
-    );
-
-    return unsubscribe;
+    if (logoutError) {
+      throw logoutError;
+    }
   }, []);
 
   const authInfo = useMemo(
@@ -279,5 +268,3 @@ const AuthProvider = ({ children }) => {
     <AuthContext.Provider value={authInfo}>{children}</AuthContext.Provider>
   );
 };
-
-export default AuthProvider;

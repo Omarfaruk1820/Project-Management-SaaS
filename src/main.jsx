@@ -6,7 +6,7 @@ import { Toaster } from "react-hot-toast";
 
 import "./index.css";
 import router from "./component/router/router";
-import AuthProvider from "./component/auth/AuthProvider";
+import { AuthProvider } from "./component/auth/AuthProvider.jsx";
 
 // Create one QueryClient instance for the application.
 const queryClient = new QueryClient({
