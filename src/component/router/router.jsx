@@ -9,6 +9,7 @@ import ProjectDetails from "../projects/ProjectDetails";
 import CreateProject from "../projects/CreateProject";
 import CreateTask from "../projects/CreateTask";
 import MyTasks from "../projects/MyTasks";
+import ProjectBoard from "../pages/ProjectBoard";
 
 const router = createBrowserRouter([
   {
@@ -35,21 +36,27 @@ const router = createBrowserRouter([
         element: <Projects></Projects>,
       },
       {
-        path: "projects/:id",
-        element: <ProjectDetails></ProjectDetails>,
-      },
-      {
         path: "projects/create",
         element: <CreateProject></CreateProject>,
       },
       {
+        path: "my-tasks",
+        element: <MyTasks></MyTasks>,
+      },
+      {
+        path: "projects/:id",
+        element: <ProjectDetails></ProjectDetails>,
+      },
+
+      {
         path: "projects/:id/tasks/create",
         element: <CreateTask></CreateTask>,
       },
+
       {
-        path:"my-tasks",
-        element:<MyTasks></MyTasks>
-      }
+        path: "projects/:id/board",
+        element: <ProjectBoard></ProjectBoard>,
+      },
     ],
   },
 ]);
